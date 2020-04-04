@@ -1,0 +1,236 @@
+import torch
+from torch import nn
+from torch.nn import init
+import torchvision
+import math
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class LargeScaleEncoder(nn.Module):
+    def __init__(self, pretrained=True, fine_tune=True):
+        super(LargeScaleEncoder, self).__init__()
+
+        self.fcn = torchvision.models.segmentation.fcn_resnet101(
+            pretrained=pretrained)
+        self.pool = nn.MaxPool2d(kernel_size=4, stride=4, ceil_mode=False)
+
+        if fine_tune:
+            self.fine_tune()
+
+    def forward(self, image):
+        out = self.fcn(img)['out']
+
+        out = self.pool(out)  # (batch_size, 56, 56, 21)
+        out = out.argmax(3)  # (batch_size, 56, 56)
+
+        return out  # (batch_size, 56, 56)
+
+    def fine_tune(self):
+        for p in self.fcn.parameters():
+            p.require_grad = False
+
+        layer = list(self.fcn.children())[0]
+        for c in list(layer.children())[0:-2]:
+            for p in c:
+                p.require_grad = True
+
+
+class SmallScaleEncoder(nn.Module):
+    def __init__(self, pretrained=True, fine_tune=True):
+        super(SmallScaleEncoder, self).__init__()
+        vgg = torchvision.models.vgg16(pretrained=pretrained)
+        modules = list(vgg.children())[0]
+        modules = list(modules.children())[:16]
+
+        self.vgg = nn.Sequential(*modules)
+
+        self.fine_tune(fine_tune=fine_tune)
+
+    def forward(self, img):  # (batch_size, 3, 224, 224)
+        output = self.vgg(img)
+        output = output.permute(0, 2, 3, 1)
+        return output  # (batch_size, 28, 28, 256)
+
+    def fine_tune(self, fine_tune=True):
+        for p in self.vgg.parameters():
+            p.requires_grad = False
+
+
+class MSLSTMCell(nn.Module):
+    def __init__(self, input_dim, h_dim):
+        super(MSLSTMCell, self).__init__()
+
+        self.W_i = nn.Linear(input_dim+h_dim, h_dim)
+        self.W_o = nn.Linear(input_dim+h_dim, h_dim)
+        self.W_f = nn.Linear(input_dim+h_dim, h_dim)
+        self.W_g1 = nn.Linear(input_dim+h_dim, h_dim)
+        self.W_g2 = nn.Linear(input_dim+h_dim, h_dim)
+        self.reset_parameters(h_dim)
+
+        self.tanh = nn.Tanh()
+        self.sigma = nn.Sigmoid()
+        self.mlp = nn.Linear(h_dim*2, h_dim)
+
+    def forward(self, x, state):
+        h, c, C = state
+
+        x = torch.cat([x, h], dim=1)
+
+        i = self.sigma(self.W_i(x))
+        f = self.sigma(self.W_f(x))
+        o = self.sigma(self.W_o(x))
+
+        g1 = self.tanh(self.W_g1(x))
+        g2 = self.tanh(self.W_g2(x))
+
+        new_c = f*c+i*g1
+        new_C = f*C+i*g2
+
+        new_h = o*self.tanh(
+            self.mlp(torch.cat([new_c, new_C], dim=1))
+        )
+
+        return new_h, new_c, new_C
+
+    def reset_parameters(self, hidden_size):
+        stdv = 1.0 / math.sqrt(hidden_size)
+        for weight in self.parameters():
+            init.uniform_(weight, -stdv, stdv)
+
+
+class Attention(nn.Module):
+    """
+    Attention Network.
+    """
+
+    def __init__(self, encoder_dim, decoder_dim, attention_dim):
+        """
+        :param encoder_dim: feature size of encoded images
+        :param decoder_dim: size of decoder's RNN
+        :param attention_dim: size of the attention network
+        """
+        super(Attention, self).__init__()
+        # linear layer to transform encoded image
+        self.encoder_att = nn.Linear(encoder_dim, attention_dim)
+        # linear layer to transform decoder's output
+        self.decoder_att = nn.Linear(decoder_dim, attention_dim)
+        # linear layer to calculate values to be softmax-ed
+        self.full_att = nn.Linear(attention_dim, 1)
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=1)  # softmax layer to calculate weights
+
+    def forward(self, feature, h):
+        """
+        Forward propagation.
+
+        :param feature: encoded images, a tensor of dimension (batch_size, num_pixels, encoder_dim)
+        :param decoder_hidden: previous decoder output, a tensor of dimension (batch_size, decoder_dim)
+        :return: attention weighted encoding, weights
+        """
+        att1 = self.encoder_att(
+            feature)  # (batch_size, num_pixels, attention_dim)
+        att2 = self.decoder_att(h)  # (batch_size, attention_dim)
+        # (batch_size, num_pixels)
+        att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)
+        alpha = self.softmax(att)  # (batch_size, num_pixels)
+        attention_weighted_encoding = (
+            feature * alpha.unsqueeze(2)).sum(dim=1)  # (batch_size, encoder_dim)
+
+        return attention_weighted_encoding, alpha
+
+
+class Decoder(nn.Module):
+    def __init__(self, embed_dim, h_dim, vocab_size, attention_dim,
+                 info_shape=(32, 28, 28, 256), relation_shape=(32, 56, 56)):
+        """
+        :info: batch_size, 28,28,256
+        :relation: batch_size, 56, 56
+        """
+        super(Decoder, self).__init__()
+        self.vocab_size = vocab_size
+        self.batch_size = info_shape.shape[0]
+
+        self.info_num_pixel = info_shape[1]*info_shape[2]
+        self.info_dim = info_shape[3]
+        self.relation_num_pixel = relation_shape[1]*info_shape[2]
+
+        self.W_init_c = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
+        self.W_init_h = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
+        self.W_init_C = nn.Linear(self.relation_num_pixel, h_dim)
+
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.attention = Attention(self.info_dim, h_dim, attention_dim)
+
+        self.lstm = MSLSTMCell(embed_dim+self.info_num_pixel, h_dim)
+
+        self.fc = nn.Linear(h_dim, vocab_size)
+        self.dropout = nn.Dropout()
+
+    def forward(self, info, relation, captions, captions_lens):
+        # (batch_size, 28*28,256)
+        info = info.view(self.batch_size, -1, self.info_dim)
+        relation = relation.view(self.batch_size, -1)  # (batch_size, 56*56)
+
+        captions_lens, sort_index = captions_lens.squeeze(
+            1).sort(dim=0, descending=True)
+        captions = captions[sort_index]
+        info = info[sort_index]
+        relation = relation[sort_index]
+
+        sent_len = (captions_lens-1).tolist()
+        words = self.embedding(captions)
+
+        h, c, C = self._init_hidden_state(info, relation)
+
+        predictions = torch.zeros(self.batch_size, max(
+            sent_len), self.vocab_size).to(device)
+        alphas = torch.zeros(self.batch_size, max(
+            sent_len), self.info_num_pixel).to(device)
+
+        for t in range(max(sent_len)):
+            batch_size_t = sum([l > t for l in sent_len])
+            word = words[:batch_size_t, t]
+            info = info[:batch_size_t]
+            h = h[:batch_size_t]
+
+            pred, (h, c, C), alpha = self.next_pred(word, info, h)
+
+            predictions[:batch_size_t, t, :] = pred
+            alphas[:batch_size_t, t, :] = alpha
+
+        return predictions, sent_len, alphas, sort_index
+
+    def next_pred(self, word, info, state):
+        h, c, C = state
+        attention_weighted_feature, alpha = self.attention(info, h)
+        x = torch.cat(word, attention_weighted_feature, dim=1)
+
+        h, c, C = self.lstm(x, (h, c, C))
+
+        pred = self.fc(self.dropout(h))
+        return pred, (h, c, C), alpha
+
+    def _init_hidden_state(self, info_feature, relation_feature):
+        h = self.W_init_h(info_feature)
+        c = self.W_init_c(info_feature)
+        C = self.W_init_C(relation_feature)
+
+        return h, c, C
+
+
+if __name__ == "__main__":
+    img = torch.randn(32, 224, 224)
+    encoder1 = LargeScaleEncoder(fine_tune=True)
+    encoder2 = SmallScaleEncoder(fine_tune=True)
+    a = encoder1(img)
+    b = encoder2(img)
+
+    info = torch.randn(32, 28, 28, 256)
+    relation = torch.randn(32, 56, 56)
+    word = torch.randn(32, 1024)
+
+    decoder = Decoder(1024, 1024, 1000, 1024)
+    h, c, C = decoder._init_hidden_state(info, relation)
+    decoder.next_pred(word, info, (h, c, C))
