@@ -22,8 +22,8 @@ class LargeScaleEncoder(nn.Module):
     def forward(self, image):
         out = self.fcn(img)['out']
 
-        out = self.pool(out)  # (batch_size, 56, 56, 21)
-        out = out.argmax(3)  # (batch_size, 56, 56)
+        out = self.pool(out)  # (batch_size, 21, 56, 56)
+        out = out.argmax(1)  # (batch_size, 56, 56)
 
         return out  # (batch_size, 56, 56)
 
@@ -33,7 +33,7 @@ class LargeScaleEncoder(nn.Module):
 
         layer = list(self.fcn.children())[0]
         for c in list(layer.children())[0:-2]:
-            for p in c:
+            for p in c.parameters():
                 p.require_grad = True
 
 
@@ -42,7 +42,7 @@ class SmallScaleEncoder(nn.Module):
         super(SmallScaleEncoder, self).__init__()
         vgg = torchvision.models.vgg16(pretrained=pretrained)
         modules = list(vgg.children())[0]
-        modules = list(modules.children())[:16]
+        modules = list(modules.children())[:17]
 
         self.vgg = nn.Sequential(*modules)
 
@@ -129,8 +129,7 @@ class Attention(nn.Module):
         :param decoder_hidden: previous decoder output, a tensor of dimension (batch_size, decoder_dim)
         :return: attention weighted encoding, weights
         """
-        att1 = self.encoder_att(
-            feature)  # (batch_size, num_pixels, attention_dim)
+        att1 = self.encoder_att(feature)  # (batch_size, num_pixels, attention_dim)
         att2 = self.decoder_att(h)  # (batch_size, attention_dim)
         # (batch_size, num_pixels)
         att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)
@@ -150,11 +149,11 @@ class Decoder(nn.Module):
         """
         super(Decoder, self).__init__()
         self.vocab_size = vocab_size
-        self.batch_size = info_shape.shape[0]
+        self.batch_size = info_shape[0]
 
         self.info_num_pixel = info_shape[1]*info_shape[2]
         self.info_dim = info_shape[3]
-        self.relation_num_pixel = relation_shape[1]*info_shape[2]
+        self.relation_num_pixel = relation_shape[1]*relation_shape[2]
 
         self.W_init_c = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
         self.W_init_h = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
@@ -163,7 +162,7 @@ class Decoder(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.attention = Attention(self.info_dim, h_dim, attention_dim)
 
-        self.lstm = MSLSTMCell(embed_dim+self.info_num_pixel, h_dim)
+        self.lstm = MSLSTMCell(embed_dim+self.info_dim, h_dim)
 
         self.fc = nn.Linear(h_dim, vocab_size)
         self.dropout = nn.Dropout()
@@ -205,7 +204,7 @@ class Decoder(nn.Module):
     def next_pred(self, word, info, state):
         h, c, C = state
         attention_weighted_feature, alpha = self.attention(info, h)
-        x = torch.cat(word, attention_weighted_feature, dim=1)
+        x = torch.cat((word, attention_weighted_feature), dim=1)
 
         h, c, C = self.lstm(x, (h, c, C))
 
@@ -213,6 +212,9 @@ class Decoder(nn.Module):
         return pred, (h, c, C), alpha
 
     def _init_hidden_state(self, info_feature, relation_feature):
+        info_feature = info_feature.flatten(start_dim=1)
+        relation_feature = relation_feature.flatten(start_dim=1)
+
         h = self.W_init_h(info_feature)
         c = self.W_init_c(info_feature)
         C = self.W_init_C(relation_feature)
@@ -221,16 +223,16 @@ class Decoder(nn.Module):
 
 
 if __name__ == "__main__":
-    img = torch.randn(32, 224, 224)
-    encoder1 = LargeScaleEncoder(fine_tune=True)
-    encoder2 = SmallScaleEncoder(fine_tune=True)
+    img = torch.randn(32, 3, 224, 224).to(device)
+    encoder1 = LargeScaleEncoder(pretrained=False, fine_tune=True).to(device)
+    encoder2 = SmallScaleEncoder(pretrained=False, fine_tune=True).to(device)
     a = encoder1(img)
     b = encoder2(img)
 
-    info = torch.randn(32, 28, 28, 256)
-    relation = torch.randn(32, 56, 56)
-    word = torch.randn(32, 1024)
+    info = torch.randn(32, 28*28, 256).to(device)
+    relation = torch.randn(32, 56*56).to(device)
+    word = torch.randn(32, 1024).to(device)
 
-    decoder = Decoder(1024, 1024, 1000, 1024)
+    decoder = Decoder(1024, 1024, 1000, 1024).to(device)
     h, c, C = decoder._init_hidden_state(info, relation)
     decoder.next_pred(word, info, (h, c, C))
