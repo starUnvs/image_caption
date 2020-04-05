@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torch.nn import init
 import torchvision
+from torchvision import transforms
 import math
 
 
@@ -14,18 +15,19 @@ class LargeScaleEncoder(nn.Module):
 
         self.fcn = torchvision.models.segmentation.fcn_resnet101(
             pretrained=pretrained)
-        self.pool = nn.MaxPool2d(kernel_size=4, stride=4, ceil_mode=False)
+
+        self.pool = nn.MaxPool2d(2, 2)
 
         if fine_tune:
             self.fine_tune()
 
     def forward(self, img):
-        out = self.fcn(img)['out']
+        out = self.pool(img)
+        out = self.fcn(out)['out']
 
-        out = self.pool(out)  # (batch_size, 21, 56, 56)
-        out = out.argmax(1)  # (batch_size, 56, 56)
+        out = out.argmax(1)  # (batch_size, 128, 128)
 
-        return out  # (batch_size, 56, 56)
+        return out/1.  # (batch_size, 128, 128)
 
     def fine_tune(self):
         for p in self.fcn.parameters():
@@ -48,10 +50,10 @@ class SmallScaleEncoder(nn.Module):
 
         self.fine_tune(fine_tune=fine_tune)
 
-    def forward(self, img):  # (batch_size, 3, 224, 224)
+    def forward(self, img):  # (batch_size, 3, 256, 256)
         output = self.vgg(img)
         output = output.permute(0, 2, 3, 1)
-        return output  # (batch_size, 28, 28, 256)
+        return output  # (batch_size, 32, 32, 256)
 
     def fine_tune(self, fine_tune=True):
         for p in self.vgg.parameters():
@@ -160,10 +162,10 @@ class Attention(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, embed_dim, h_dim, vocab_size, attention_dim,
                  dropout=0.5,
-                 info_shape=(32, 28, 28, 256), relation_shape=(32, 56, 56)):
+                 info_shape=(32, 32, 32, 256), relation_shape=(32, 128, 128)):
         """
-        :info: batch_size, 28,28,256
-        :relation: batch_size, 56, 56
+        :info: batch_size, 32,32,256
+        :relation: batch_size, 128, 128
         """
         super(Decoder, self).__init__()
         self.vocab_size = vocab_size
@@ -186,9 +188,9 @@ class Decoder(nn.Module):
         self.dropout = nn.Dropout()
 
     def forward(self, info, relation, captions, captions_lens):
-        # (batch_size, 28*28,256)
+        # (batch_size, 32*32,256)
         info = info.view(self.batch_size, -1, self.info_dim)
-        relation = relation.view(self.batch_size, -1)  # (batch_size, 56*56)
+        relation = relation.view(self.batch_size, -1)  # (batch_size, 128*128)
 
         captions_lens, sort_index = captions_lens.squeeze(
             1).sort(dim=0, descending=True)
@@ -211,6 +213,8 @@ class Decoder(nn.Module):
             word = words[:batch_size_t, t]
             info = info[:batch_size_t]
             h = h[:batch_size_t]
+            c = c[:batch_size_t]
+            C = C[:batch_size_t]
 
             pred, (h, c, C), alpha = self.next_pred(word, info, (h, c, C))
 
@@ -241,16 +245,26 @@ class Decoder(nn.Module):
 
 
 if __name__ == "__main__":
-    img = torch.randn(32, 3, 224, 224).to(device)
-    encoder1 = LargeScaleEncoder(pretrained=False, fine_tune=True).to(device)
-    encoder2 = SmallScaleEncoder(pretrained=False, fine_tune=True).to(device)
-    a = encoder1(img)
-    b = encoder2(img)
+    #img = torch.randn(32, 3, 256, 256).to(device)
+    #encoder1 = LargeScaleEncoder(pretrained=False, fine_tune=True).to(device)
+    #encoder2 = SmallScaleEncoder(pretrained=False, fine_tune=True).to(device)
+    #a = encoder1(img)
+    #b = encoder2(img)
 
-    info = torch.randn(32, 28*28, 256).to(device)
-    relation = torch.randn(32, 56*56).to(device)
-    word = torch.randn(32, 1024).to(device)
+    info = torch.randn(32, 32*32, 256).to(device)
+    relation = torch.randn(32, 128*128).to(device)
 
+    #from utils import CaptionDataset
+    # train_loader = torch.utils.data.DataLoader(
+    #CaptionDataset('../preprocessed_data', 'rsicd', 'TRAIN'),
+    # batch_size=32, shuffle=True, pin_memory=True)
+    #img, cap, caplen = next(iter(train_loader))
+    #cap = cap.to(device)
+    #caplen = caplen.to(device)
     decoder = Decoder(1024, 1024, 1000, 1024).to(device)
+    #score, alphas, sort_ind = decoder(info, relation, cap, caplen)
+
+    word = torch.randn(32, 1024).to(device)
     h, c, C = decoder._init_hidden_state(info, relation)
     decoder.next_pred(word, info, (h, c, C))
+    decoder.next_pred(word[:5], info[:5], (h[:5], c[:5], C[:5]))
