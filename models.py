@@ -58,6 +58,21 @@ class SmallScaleEncoder(nn.Module):
             p.requires_grad = False
 
 
+class Encoder(nn.Module):
+    def __init__(self, large_finetune=True, large_pretrained=True,
+                 small_finetune=True, small_pretrained=True):
+        self.large_encoder = LargeScaleEncoder(
+            large_pretrained, large_finetune)
+        self.small_encoder = SmallScaleEncoder(
+            small_pretrained, small_finetune)
+
+    def forward(self, img):
+        info = self.small_encoder(img)
+        relation = self.large_encoder(img)
+
+        return info, relation
+
+
 class MSLSTMCell(nn.Module):
     def __init__(self, input_dim, h_dim):
         super(MSLSTMCell, self).__init__()
@@ -129,7 +144,8 @@ class Attention(nn.Module):
         :param decoder_hidden: previous decoder output, a tensor of dimension (batch_size, decoder_dim)
         :return: attention weighted encoding, weights
         """
-        att1 = self.encoder_att(feature)  # (batch_size, num_pixels, attention_dim)
+        att1 = self.encoder_att(
+            feature)  # (batch_size, num_pixels, attention_dim)
         att2 = self.decoder_att(h)  # (batch_size, attention_dim)
         # (batch_size, num_pixels)
         att = self.full_att(self.relu(att1 + att2.unsqueeze(1))).squeeze(2)
@@ -142,6 +158,7 @@ class Attention(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, embed_dim, h_dim, vocab_size, attention_dim,
+                 dropout=0.5,
                  info_shape=(32, 28, 28, 256), relation_shape=(32, 56, 56)):
         """
         :info: batch_size, 28,28,256
@@ -199,7 +216,7 @@ class Decoder(nn.Module):
             predictions[:batch_size_t, t, :] = pred
             alphas[:batch_size_t, t, :] = alpha
 
-        return predictions, sent_len, alphas, sort_index
+        return predictions, alphas, sort_index
 
     def next_pred(self, word, info, state):
         h, c, C = state
