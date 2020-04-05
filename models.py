@@ -19,7 +19,7 @@ class LargeScaleEncoder(nn.Module):
         if fine_tune:
             self.fine_tune()
 
-    def forward(self, image):
+    def forward(self, img):
         out = self.fcn(img)['out']
 
         out = self.pool(out)  # (batch_size, 21, 56, 56)
@@ -61,6 +61,7 @@ class SmallScaleEncoder(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, large_finetune=True, large_pretrained=True,
                  small_finetune=True, small_pretrained=True):
+        super(Encoder, self).__init__()
         self.large_encoder = LargeScaleEncoder(
             large_pretrained, large_finetune)
         self.small_encoder = SmallScaleEncoder(
@@ -211,7 +212,7 @@ class Decoder(nn.Module):
             info = info[:batch_size_t]
             h = h[:batch_size_t]
 
-            pred, (h, c, C), alpha = self.next_pred(word, info, h)
+            pred, (h, c, C), alpha = self.next_pred(word, info, (h, c, C))
 
             predictions[:batch_size_t, t, :] = pred
             alphas[:batch_size_t, t, :] = alpha
