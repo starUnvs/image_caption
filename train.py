@@ -172,9 +172,9 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
         caplens = caplens.to(device)
 
         # Forward prop.
-        #info, relation = encoder(imgs)
-        info=torch.randn(32,28,28,256).to(device)
-        relation=torch.randn(32,56,56).to(device)
+        info, relation = encoder(imgs)
+        #info=torch.randn(32,28,28,256).to(device)
+        #relation=torch.randn(32,56,56).to(device)
         scores, alphas, sort_ind = decoder(
             info, relation, caps, caplens)
 
