@@ -179,7 +179,7 @@ def train(train_loader, encoder, decoder, criterion, encoder_optimizer, decoder_
             info, relation, caps, caplens)
 
         caps_sorted = caps[sort_ind]
-        caplens_sorted = caplens[sort_ind]-1
+        caplens_sorted = (caplens[sort_ind]-1).squeeze(1).tolist()
 
         # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
         targets = caps_sorted[:, 1:]
@@ -276,7 +276,7 @@ def validate(val_loader, encoder, decoder, criterion):
 
             # Since we decoded starting with <start>, the targets are all words after <start>, up to <end>
             caps_sorted = caps[sort_ind]
-            caplens_sorted = caplens[sort_ind]-1
+            caplens_sorted = (caplens[sort_ind]-1).squeeze(1).tolist()
             targets = caps_sorted[:, 1:]
 
             # Remove timesteps that we didn't decode at, or are pads

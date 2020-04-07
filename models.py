@@ -184,13 +184,19 @@ class Decoder(nn.Module):
 
         self.lstm = MSLSTMCell(embed_dim+self.info_dim, h_dim)
 
+        self.f_beta=nn.Linear(h_dim, self.info_dim)
+
         self.fc = nn.Linear(h_dim, vocab_size)
         self.dropout = nn.Dropout()
 
+        self.init_weights()
+
     def forward(self, info, relation, captions, captions_lens):
         # (batch_size, 32*32,256)
-        info = info.view(self.batch_size, -1, self.info_dim)
-        relation = relation.view(self.batch_size, -1)  # (batch_size, 128*128)
+        batch_size=captions.shape[0]
+
+        info = info.view(batch_size, -1, self.info_dim)
+        relation = relation.view(batch_size, -1)  # (batch_size, 128*128)
 
         captions_lens, sort_index = captions_lens.squeeze(
             1).sort(dim=0, descending=True)
@@ -203,9 +209,9 @@ class Decoder(nn.Module):
 
         h, c, C = self._init_hidden_state(info, relation)
 
-        predictions = torch.zeros(self.batch_size, max(
+        predictions = torch.zeros(batch_size, max(
             sent_len), self.vocab_size).to(device)
-        alphas = torch.zeros(self.batch_size, max(
+        alphas = torch.zeros(batch_size, max(
             sent_len), self.info_num_pixel).to(device)
 
         for t in range(max(sent_len)):
@@ -226,8 +232,10 @@ class Decoder(nn.Module):
     def next_pred(self, word, info, state):
         h, c, C = state
         attention_weighted_feature, alpha = self.attention(info, h)
-        x = torch.cat((word, attention_weighted_feature), dim=1)
+        gate = self.sigmoid(self.f_beta(h))  # gating scalar, (batch_size_t, encoder_dim)
+        attention_weighted_encoding = gate * attention_weighted_feature
 
+        x = torch.cat((word, attention_weighted_feature), dim=1)
         h, c, C = self.lstm(x, (h, c, C))
 
         pred = self.fc(self.dropout(h))
@@ -242,6 +250,11 @@ class Decoder(nn.Module):
         C = self.W_init_C(relation_feature)
 
         return h, c, C
+    
+    def init_weights(self):
+        self.embedding.weight.data.uniform_(-0.1, 0.1)
+        self.fc.bias.data.fill_(0)
+        self.fc.weight.data.uniform_(-0.1, 0.1)
 
 
 if __name__ == "__main__":
