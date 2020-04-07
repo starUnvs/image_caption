@@ -169,7 +169,6 @@ class Decoder(nn.Module):
         """
         super(Decoder, self).__init__()
         self.vocab_size = vocab_size
-        self.batch_size = info_shape[0]
 
         self.info_num_pixel = info_shape[1]*info_shape[2]
         self.info_dim = info_shape[3]
@@ -185,6 +184,7 @@ class Decoder(nn.Module):
         self.lstm = MSLSTMCell(embed_dim+self.info_dim, h_dim)
 
         self.f_beta=nn.Linear(h_dim, self.info_dim)
+        self.sigmoid=nn.Sigmoid()
 
         self.fc = nn.Linear(h_dim, vocab_size)
         self.dropout = nn.Dropout()
