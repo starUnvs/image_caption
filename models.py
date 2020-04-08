@@ -34,30 +34,40 @@ class LargeScaleEncoder(nn.Module):
             p.requires_grad = False
 
         layer = list(self.fcn.children())[0]
-        for c in list(layer.children())[0:-2]:
+        for c in list(layer.children())[5:]:
             for p in c.parameters():
                 p.requires_grad = True
+
+        for c in list(self.fcn.children())[1:]:
+            for p in c.parameters():
+                p.requires_grad = True
+
 
 
 class SmallScaleEncoder(nn.Module):
     def __init__(self, pretrained=True, fine_tune=True):
         super(SmallScaleEncoder, self).__init__()
-        vgg = torchvision.models.vgg16(pretrained=pretrained)
+        vgg = torchvision.models.vgg19(pretrained=pretrained)
         modules = list(vgg.children())[0]
-        modules = list(modules.children())[:17]
+        modules = list(modules.children())[:19]
 
         self.vgg = nn.Sequential(*modules)
 
-        self.fine_tune(fine_tune=fine_tune)
+        if fine_tune:
+            self.fine_tune()
 
     def forward(self, img):  # (batch_size, 3, 256, 256)
         output = self.vgg(img)
         output = output.permute(0, 2, 3, 1)
         return output  # (batch_size, 32, 32, 256)
 
-    def fine_tune(self, fine_tune=True):
+    def fine_tune(self):
         for p in self.vgg.parameters():
             p.requires_grad = False
+
+        for c in list(self.vgg.children())[5]:
+            for p in c.parameters():
+                p.requires_grad=True
 
 
 class Encoder(nn.Module):

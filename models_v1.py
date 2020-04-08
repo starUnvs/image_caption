@@ -15,8 +15,6 @@ class LargeScaleEncoder(nn.Module):
 
         self.fcn = torchvision.models.segmentation.fcn_resnet101(
             pretrained=pretrained)
-        resnet = torchvision.models.resnet101(
-            pretrained=True)  # pretrained ImageNet ResNet-101
 
         self.pool = nn.MaxPool2d(2, 2)
 
@@ -35,13 +33,14 @@ class LargeScaleEncoder(nn.Module):
         for p in self.fcn.parameters():
             p.requires_grad = False
 
-        layer1, layer2 = list(self.fcn.children())
-        for c in list(layer1.children())[5:]:
+        layer = list(self.fcn.children())[0]
+        for c in list(layer.children())[5:]:
             for p in c.parameters():
                 p.requires_grad = True
 
-        for p in layer2.parameters():
-            p.requires_grad = True
+        for c in list(self.fcn.children())[1:]:
+            for p in c.parameters():
+                p.requires_grad = True
 
 
 class SmallScaleEncoder(nn.Module):
