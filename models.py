@@ -65,7 +65,7 @@ class SmallScaleEncoder(nn.Module):
         for p in self.vgg.parameters():
             p.requires_grad = False
 
-        for c in list(self.vgg.children())[5]:
+        for c in list(self.vgg.children())[5:]:
             for p in c.parameters():
                 p.requires_grad=True
 
