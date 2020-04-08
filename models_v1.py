@@ -33,12 +33,15 @@ class LargeScaleEncoder(nn.Module):
 
     def fine_tune(self):
         for p in self.fcn.parameters():
-            p.require_grad = False
+            p.requires_grad = False
 
-        layer = list(self.fcn.children())[0]
-        for c in list(layer.children())[0:-2]:
+        layer1, layer2 = list(self.fcn.children())
+        for c in list(layer1.children())[5:]:
             for p in c.parameters():
-                p.require_grad = True
+                p.requires_grad = True
+
+        for p in layer2.parameters():
+            p.requires_grad = True
 
 
 class SmallScaleEncoder(nn.Module):
@@ -51,20 +54,21 @@ class SmallScaleEncoder(nn.Module):
         modules = list(resnet.children())[:-2]
         self.resnet = nn.Sequential(*modules)
 
-        self.fine_tune(fine_tune=fine_tune)
+        if fine_tune:
+            self.fine_tune()
 
     def forward(self, img):  # (batch_size, 3, 256, 256)
         output = self.resnet(img)
         output = output.permute(0, 2, 3, 1)
         return output  # (batch_size, 8, 8, 2048)
 
-    def fine_tune(self, fine_tune):
+    def fine_tune(self):
         for p in self.resnet.parameters():
             p.requires_grad = False
         # If fine-tuning, only fine-tune convolutional blocks 2 through 4
         for c in list(self.resnet.children())[5:]:
             for p in c.parameters():
-                p.requires_grad = fine_tune
+                p.requires_grad = True
 
 
 class Encoder(nn.Module):

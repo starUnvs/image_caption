@@ -31,12 +31,12 @@ class LargeScaleEncoder(nn.Module):
 
     def fine_tune(self):
         for p in self.fcn.parameters():
-            p.require_grad = False
+            p.requires_grad = False
 
         layer = list(self.fcn.children())[0]
         for c in list(layer.children())[0:-2]:
             for p in c.parameters():
-                p.require_grad = True
+                p.requires_grad = True
 
 
 class SmallScaleEncoder(nn.Module):
@@ -259,8 +259,8 @@ class Decoder(nn.Module):
 
 if __name__ == "__main__":
     #img = torch.randn(32, 3, 256, 256).to(device)
-    #encoder1 = LargeScaleEncoder(pretrained=False, fine_tune=True).to(device)
-    #encoder2 = SmallScaleEncoder(pretrained=False, fine_tune=True).to(device)
+    encoder1 = LargeScaleEncoder(pretrained=False, fine_tune=True).to(device)
+    encoder2 = SmallScaleEncoder(pretrained=False, fine_tune=True).to(device)
     #a = encoder1(img)
     #b = encoder2(img)
 
