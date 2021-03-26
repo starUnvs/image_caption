@@ -7,13 +7,14 @@ from nltk.translate.bleu_score import corpus_bleu
 import torch.nn.functional as F
 from tqdm import tqdm
 import json
+import matplotlib.pyplot as plt
 
 # Parameters
 # folder with data files saved by create_input_files.py
 data_folder = '../preprocessed_data'
 data_name = 'rsicd_5_cap_per_img_5_min_word_freq'  # base name shared by data files
 # model checkpoint
-checkpoint = './BEST_checkpoint_rsicd_5_cap_per_img_5_min_word_freq.pth.tar'
+checkpoint = './BEST_checkpoint_rsicd_new.pth.tar'
 # word map, ensure it's the same the data was encoded with and the model was trained with
 word_map_file = '../preprocessed_data/WORDMAP_rsicd.json'
 # sets device for model and PyTorch tensors
@@ -35,10 +36,6 @@ with open(word_map_file, 'r') as j:
     word_map = json.load(j)
 rev_word_map = {v: k for k, v in word_map.items()}
 vocab_size = len(word_map)
-
-# Normalization transform
-normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225])
 
 
 def evaluate(beam_size):
@@ -109,7 +106,7 @@ def evaluate(beam_size):
             embeddings = decoder.embedding(
                 k_prev_words).squeeze(1)  # (s, embed_dim)
 
-            scores, _, _ = decoder.next_pred(embeddings, info, (h, c, C))
+            scores, (h,c,C), _ = decoder.next_pred(embeddings, info, (h, c, C))
             scores = F.log_softmax(scores, dim=1)
 
             # Add
@@ -152,7 +149,8 @@ def evaluate(beam_size):
             h = h[prev_word_inds[incomplete_inds]]
             c = c[prev_word_inds[incomplete_inds]]
             C = C[prev_word_inds[incomplete_inds]]
-            encoder_out = encoder_out[prev_word_inds[incomplete_inds]]
+            relation = relation[prev_word_inds[incomplete_inds]]
+            info = info[prev_word_inds[incomplete_inds]]
             top_k_scores = top_k_scores[incomplete_inds].unsqueeze(1)
             k_prev_words = next_word_inds[incomplete_inds].unsqueeze(1)
 
@@ -163,6 +161,8 @@ def evaluate(beam_size):
 
         i = complete_seqs_scores.index(max(complete_seqs_scores))
         seq = complete_seqs[i]
+
+        text = [rev_word_map[s] for s in seq]
 
         # References
         img_caps = allcaps[0].tolist()

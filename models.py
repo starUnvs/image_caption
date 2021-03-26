@@ -8,16 +8,18 @@ import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-
+# use pretrained fcn as large-scale encoder
 class LargeScaleEncoder(nn.Module):
     def __init__(self, pretrained=True, fine_tune=True):
         super(LargeScaleEncoder, self).__init__()
 
         self.fcn = torchvision.models.segmentation.fcn_resnet101(
-            pretrained=pretrained)
+            pretrained=pretrained, num_classes=31)
 
-        self.pool = nn.MaxPool2d(2, 2)
+        # add an extra pool2d to reduce image's size
+        self.pool = nn.AdaptiveAvgPool2d((128, 128))
 
+        # if fine_tune
         if fine_tune:
             self.fine_tune()
 
@@ -25,6 +27,7 @@ class LargeScaleEncoder(nn.Module):
         out = self.pool(img)
         out = self.fcn(out)['out']
 
+        # get every pixel's class
         out = out.argmax(1)  # (batch_size, 128, 128)
 
         return out/1.  # (batch_size, 128, 128)
@@ -42,12 +45,13 @@ class LargeScaleEncoder(nn.Module):
             for p in c.parameters():
                 p.requires_grad = True
 
-
-
+# use pretrained vgg19 as small-scale encoder
 class SmallScaleEncoder(nn.Module):
     def __init__(self, pretrained=True, fine_tune=True):
         super(SmallScaleEncoder, self).__init__()
         vgg = torchvision.models.vgg19(pretrained=pretrained)
+
+        # we use result of conv_layer as output, so we ignore linear layers
         modules = list(vgg.children())[0]
         modules = list(modules.children())[:19]
 
@@ -67,9 +71,9 @@ class SmallScaleEncoder(nn.Module):
 
         for c in list(self.vgg.children())[5:]:
             for p in c.parameters():
-                p.requires_grad=True
+                p.requires_grad = True
 
-
+# combine the tow encoder
 class Encoder(nn.Module):
     def __init__(self, large_finetune=True, large_pretrained=True,
                  small_finetune=True, small_pretrained=True):
@@ -85,7 +89,7 @@ class Encoder(nn.Module):
 
         return info, relation
 
-
+# a special LSTM that has two memory cells
 class MSLSTMCell(nn.Module):
     def __init__(self, input_dim, h_dim):
         super(MSLSTMCell, self).__init__()
@@ -93,15 +97,20 @@ class MSLSTMCell(nn.Module):
         self.W_i = nn.Linear(input_dim+h_dim, h_dim)
         self.W_o = nn.Linear(input_dim+h_dim, h_dim)
         self.W_f = nn.Linear(input_dim+h_dim, h_dim)
+
+        # memory cell 1's weight
         self.W_g1 = nn.Linear(input_dim+h_dim, h_dim)
+        # memory cell 2's weight
         self.W_g2 = nn.Linear(input_dim+h_dim, h_dim)
         self.reset_parameters(h_dim)
 
         self.tanh = nn.Tanh()
         self.sigma = nn.Sigmoid()
+
+        # use a mlp to combine two memory cell
         self.mlp = nn.Linear(h_dim*2, h_dim)
 
-    def forward(self, x, state):
+    def forward(self, x, state): # forward like a normal LSTM
         h, c, C = state
 
         x = torch.cat([x, h], dim=1)
@@ -180,10 +189,12 @@ class Decoder(nn.Module):
         super(Decoder, self).__init__()
         self.vocab_size = vocab_size
 
+        # get the image's size info 
         self.info_num_pixel = info_shape[1]*info_shape[2]
         self.info_dim = info_shape[3]
         self.relation_num_pixel = relation_shape[1]*relation_shape[2]
 
+        # init the decoder
         self.W_init_c = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
         self.W_init_h = nn.Linear(self.info_num_pixel*self.info_dim, h_dim)
         self.W_init_C = nn.Linear(self.relation_num_pixel, h_dim)
@@ -193,8 +204,9 @@ class Decoder(nn.Module):
 
         self.lstm = MSLSTMCell(embed_dim+self.info_dim, h_dim)
 
-        self.f_beta=nn.Linear(h_dim, self.info_dim)
-        self.sigmoid=nn.Sigmoid()
+        #parameter
+        self.f_beta = nn.Linear(h_dim, self.info_dim)
+        self.sigmoid = nn.Sigmoid()
 
         self.fc = nn.Linear(h_dim, vocab_size)
         self.dropout = nn.Dropout()
@@ -203,11 +215,12 @@ class Decoder(nn.Module):
 
     def forward(self, info, relation, captions, captions_lens):
         # (batch_size, 32*32,256)
-        batch_size=captions.shape[0]
+        batch_size = captions.shape[0]
 
         info = info.view(batch_size, -1, self.info_dim)
         relation = relation.view(batch_size, -1)  # (batch_size, 128*128)
 
+        # sort the sequence based on captions' length to simplify the loop below
         captions_lens, sort_index = captions_lens.squeeze(
             1).sort(dim=0, descending=True)
         captions = captions[sort_index]
@@ -239,10 +252,12 @@ class Decoder(nn.Module):
 
         return predictions, alphas, sort_index
 
+    # predict next step
     def next_pred(self, word, info, state):
         h, c, C = state
         attention_weighted_feature, alpha = self.attention(info, h)
-        gate = self.sigmoid(self.f_beta(h))  # gating scalar, (batch_size_t, encoder_dim)
+        # gating scalar, (batch_size_t, encoder_dim)
+        gate = self.sigmoid(self.f_beta(h))
         attention_weighted_encoding = gate * attention_weighted_feature
 
         x = torch.cat((word, attention_weighted_feature), dim=1)
@@ -260,7 +275,7 @@ class Decoder(nn.Module):
         C = self.W_init_C(relation_feature)
 
         return h, c, C
-    
+
     def init_weights(self):
         self.embedding.weight.data.uniform_(-0.1, 0.1)
         self.fc.bias.data.fill_(0)

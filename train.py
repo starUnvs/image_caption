@@ -34,7 +34,7 @@ start_epoch = 0
 epochs = 120
 # keeps track of number of epochs since there's been an improvement in validation BLEU
 epochs_since_improvement = 0
-batch_size = 32
+batch_size = 1
 encoder_lr = 1e-4  # learning rate for encoder if fine-tuning
 decoder_lr = 4e-4  # learning rate for decoder
 grad_clip = 5.  # clip gradients at an absolute value of
